@@ -3,14 +3,17 @@ import time
 import yt_dlp
 import requests
 import traceback
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_from_directory
 from dotenv import load_dotenv
 import azure.cognitiveservices.speech as speechsdk
+from moviepy.editor import VideoFileClip
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = 'uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # YouTube to WAV
 ydl_opts = {
@@ -25,6 +28,20 @@ def download_from_url(url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         result = ydl.extract_info(url, download=True)
         return ydl.prepare_filename(result).rsplit('.', 1)[0] + '.wav'
+
+# Function to convert video file to WAV audio
+def video_to_wav(video_file):
+    try:
+        output_wav = os.path.splitext(video_file)[0] + '.wav'
+        video = VideoFileClip(video_file)
+        audio = video.audio
+        audio.write_audiofile(output_wav)
+        audio.close()
+        video.close()
+        return output_wav
+    except Exception as e:
+        print(f"Error converting video to WAV: {str(e)}")
+        return None
 
 # Diarization and Transcription
 def conversation_transcriber_recognition_canceled_cb(evt: speechsdk.SessionEventArgs):
@@ -158,8 +175,13 @@ def process_audio():
         audio_file = download_from_url(url)
     elif choice == '2':
         audio_file = request.files['audio_file']
-        audio_file.save(audio_file.filename)
-        audio_file = audio_file.filename
+        audio_file.save(os.path.join(app.config['UPLOAD_FOLDER'], audio_file.filename))
+        audio_file = os.path.join(app.config['UPLOAD_FOLDER'], audio_file.filename)
+    elif choice == '3':
+        video_file = request.files['video_file']
+        video_file.save(os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename))
+        video_file_path = os.path.join(app.config['UPLOAD_FOLDER'], video_file.filename)
+        audio_file = video_to_wav(video_file_path)
     else:
         return jsonify({'error': 'Invalid choice.'}), 400
 
@@ -169,14 +191,42 @@ def process_audio():
         translated_text = translate_text(transcribed_text)
         
         if translated_text:
-            # Save output to a text file
-            with open('output.txt', 'w') as f:
+            # Save output to text files with specific names
+            transcribed_file = os.path.join(app.config['UPLOAD_FOLDER'], 'transcribed.txt')
+            translated_file = os.path.join(app.config['UPLOAD_FOLDER'], 'translated.txt')
+            with open(transcribed_file, 'w', encoding='utf-8') as f:
+                f.write(transcribed_text)
+            with open(translated_file, 'w', encoding='utf-8') as f:
                 f.write(translated_text)
-            return jsonify({'transcribed_text': transcribed_text, 'translated_text': translated_text, 'output_file': 'output.txt'})
+            return jsonify({
+                'transcribed_text': transcribed_text, 
+                'translated_text': translated_text, 
+                'transcribed_file': 'transcribed.txt', 
+                'translated_file': 'translated.txt'
+            })
         else:
             return jsonify({'error': 'Translation failed.'}), 500
     else:
         return jsonify({'error': 'Transcription failed.'}), 500
 
-if __name__ == "__main__":
+@app.route('/download/<filename>')
+def download_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/ask', methods=['POST'])
+def ask():
+    question = request.form['question']
+    output_file = os.path.join(app.config['UPLOAD_FOLDER'], 'translated.txt')
+
+    if not os.path.exists(output_file):
+        return jsonify({'error': 'Output file not found.'}), 404
+
+    with open(output_file, 'r', encoding='utf-8') as file:
+        document_text = file.read()
+
+    answer = get_openai_response("just answer to the following question very accurately:", f"{question}\n\n{document_text}")
+
+    return jsonify({'answer': answer})
+
+if __name__ == '__main__':
     app.run(debug=True)
