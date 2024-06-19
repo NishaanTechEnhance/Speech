@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Speech Diarization</title>
+    <title>Speaker Diarization</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            background-color: #f4f4f9;
             margin: 0;
             padding: 0;
+            background-color: #f4f4f9;
         }
         .header {
             width: 100%;
@@ -35,6 +35,7 @@
             border-radius: 10px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
             height: 100%;
+            overflow-y: auto;
         }
         h2 {
             margin-top: 0;
@@ -43,20 +44,20 @@
             display: block;
             margin-bottom: 5px;
         }
-        input[type="text"], input[type="file"], input[type="submit"] {
+        input[type="text"], input[type="file"], button[type="submit"] {
             width: 100%;
             padding: 10px;
             margin-bottom: 10px;
             border: 1px solid #ccc;
             border-radius: 5px;
         }
-        input[type="submit"] {
+        button[type="submit"] {
             background-color: #007bff;
             color: #fff;
             border: none;
             cursor: pointer;
         }
-        input[type="submit"]:hover {
+        button[type="submit"]:hover {
             background-color: #0056b3;
         }
         .hidden {
@@ -81,84 +82,138 @@
     </style>
 </head>
 <body>
-    <div class="header">Speech Diarization</div>
+    <div class="header">Speaker Diarization</div>
     <div class="container">
         <div class="left">
             <div class="box">
-                <h2>Select an Option</h2>
-                <form id="audioForm" action="/process_audio" method="post" enctype="multipart/form-data">
-                    <label>
-                        <input type="radio" name="choice" value="1">
-                        YouTube URL
-                    </label>
-                    <label>
-                        <input type="radio" name="choice" value="2">
-                        Upload Audio File
-                    </label>
+                <h2>Audio Processing</h2>
+                <form id="audio-form" action="/process_audio" method="post" enctype="multipart/form-data">
+                    <label for="choice">Choose an option:</label><br>
+                    <input type="radio" id="url" name="choice" value="1">
+                    <label for="url">YouTube URL</label><br>
+                    <input type="radio" id="audio-file" name="choice" value="2">
+                    <label for="audio-file">Upload Audio File</label><br>
+                    <input type="radio" id="video-file" name="choice" value="3">
+                    <label for="video-file">Upload Video File</label><br><br>
 
-                    <div id="url_input" class="hidden">
+                    <div id="url_input" style="display:none;">
                         <label for="url">YouTube URL:</label>
-                        <input type="text" id="url" name="url">
+                        <input type="text" id="url_input_field" name="url"><br><br>
                     </div>
 
-                    <div id="file_input" class="hidden">
-                        <label for="audio_file">Audio File:</label>
-                        <input type="file" id="audio_file" name="audio_file">
+                    <div id="audio_file_input" style="display:none;">
+                        <label for="audio_file">Upload Audio File:</label>
+                        <input type="file" id="audio_file" name="audio_file"><br><br>
                     </div>
 
-                    <input type="submit" value="Submit">
+                    <div id="video_file_input" style="display:none;">
+                        <label for="video_file">Upload Video File:</label>
+                        <input type="file" id="video_file" name="video_file"><br><br>
+                    </div>
+
+                    <button type="submit">Submit</button>
                 </form>
-                <div id="processing" class="hidden">
-                    Processing... <img src="loading.gif" alt="Loading">
-                </div>
-                <div id="processed" class="hidden">Processed</div>
             </div>
         </div>
         <div class="right">
-            <div id="output" class="hidden"></div>
+            <div class="box">
+                <h2>Ask a Question</h2>
+                <form id="question-form" action="/ask" method="post" enctype="multipart/form-data">
+                    <label for="question">Question:</label><br>
+                    <input type="text" id="question" name="question" required><br><br>
+                    <button type="submit">Submit</button>
+                </form>
+                <div id="processing" class="hidden">Processing...</div>
+                <div id="output" class="hidden">
+                    <h2>Output:</h2>
+                    <p id="output-text"></p>
+                </div>
+                <div id="download-links" class="hidden">
+                    <h2>Download Links:</h2>
+                    <a id="transcribed-download" href="#" download>Download Transcribed Text</a><br>
+                    <a id="translated-download" href="#" download>Download Translated Text</a>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
-        document.querySelectorAll('input[name="choice"]').forEach((elem) => {
-            elem.addEventListener("change", function(event) {
-                if (event.target.value === '1') {
-                    document.getElementById("url_input").classList.remove("hidden");
-                    document.getElementById("file_input").classList.add("hidden");
-                } else if (event.target.value === '2') {
-                    document.getElementById("url_input").classList.add("hidden");
-                    document.getElementById("file_input").classList.remove("hidden");
-                }
-            });
-        });
+        document.getElementById('url').onclick = function() {
+            document.getElementById('url_input').style.display = 'block';
+            document.getElementById('audio_file_input').style.display = 'none';
+            document.getElementById('video_file_input').style.display = 'none';
+        };
+        document.getElementById('audio-file').onclick = function() {
+            document.getElementById('url_input').style.display = 'none';
+            document.getElementById('audio_file_input').style.display = 'block';
+            document.getElementById('video_file_input').style.display = 'none';
+        };
+        document.getElementById('video-file').onclick = function() {
+            document.getElementById('url_input').style.display = 'none';
+            document.getElementById('audio_file_input').style.display = 'none';
+            document.getElementById('video_file_input').style.display = 'block';
+        };
 
-        document.getElementById("audioForm").addEventListener("submit", function(event) {
+        document.getElementById('audio-form').addEventListener('submit', function(event) {
             event.preventDefault();
-            var form = event.target;
-            var formData = new FormData(form);
+            const formData = new FormData(this);
 
             document.getElementById("processing").classList.remove("hidden");
-            document.getElementById("processed").classList.add("hidden");
             document.getElementById("output").classList.add("hidden");
+            document.getElementById("download-links").classList.add("hidden");
 
-            fetch(form.action, {
-                method: form.method,
+            fetch('/process_audio', {
+                method: 'POST',
                 body: formData
             })
             .then(response => response.json())
             .then(data => {
                 document.getElementById("processing").classList.add("hidden");
-                document.getElementById("processed").classList.remove("hidden");
-                if (data.translated_text) {
-                    document.getElementById("output").innerText = data.translated_text;
-                    document.getElementById("output").classList.remove("hidden");
+                if (data.transcribed_text) {
+                    document.getElementById('output-text').innerText = `Transcribed Text:\n\n${data.transcribed_text}\n\nTranslated Text:\n\n${data.translated_text}`;
+                    document.getElementById('output').classList.remove("hidden");
+
+                    document.getElementById('transcribed-download').href = `/download/${data.transcribed_file}`;
+                    document.getElementById('translated-download').href = `/download/${data.translated_file}`;
+                    document.getElementById('download-links').classList.remove("hidden");
                 } else if (data.error) {
-                    alert("Error: " + data.error);
+                    document.getElementById('output-text').innerText = "Error: " + data.error;
+                    document.getElementById('output').classList.remove("hidden");
                 }
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert("An error occurred while processing the audio.");
+                alert("An error occurred while processing your request.");
+                document.getElementById("processing").classList.add("hidden");
+            });
+        });
+
+        document.getElementById('question-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const formData = new FormData(this);
+
+            document.getElementById("processing").classList.remove("hidden");
+            document.getElementById("output").classList.add("hidden");
+
+            fetch('/ask', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById("processing").classList.add("hidden");
+                if (data.answer) {
+                    document.getElementById('output-text').innerText = `Answer:\n\n${data.answer}`;
+                    document.getElementById('output').classList.remove("hidden");
+                } else if (data.error) {
+                    document.getElementById('output-text').innerText = "Error: " + data.error;
+                    document.getElementById('output').classList.remove("hidden");
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert("An error occurred while processing your request.");
+                document.getElementById("processing").classList.add("hidden");
             });
         });
     </script>
