@@ -7,17 +7,17 @@ from flask import Blueprint, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 import azure.cognitiveservices.speech as speechsdk
 from moviepy.editor import VideoFileClip
-# Create Flask application instance
 from app import app
-
+import re
+ 
 # Load environment variables from .env file
 load_dotenv()
-
+ 
 routes = Blueprint('routes', __name__)
 UPLOAD_FOLDER = r'backend\backend\uploads'
-
+ 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
+ 
 # YouTube to WAV configuration
 ydl_opts = {
     'format': 'bestaudio/best',
@@ -26,13 +26,13 @@ ydl_opts = {
         'preferredcodec': 'wav',
     }],
 }
-
+ 
 # Function to download audio from YouTube URL and convert to WAV
 def download_from_url(url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         result = ydl.extract_info(url, download=True)
         return ydl.prepare_filename(result).rsplit('.', 1)[0] + '.wav'
-
+ 
 # Function to convert video file to WAV audio
 def video_to_wav(video_file):
     try:
@@ -46,14 +46,14 @@ def video_to_wav(video_file):
     except Exception as e:
         print(f"Error converting video to WAV: {str(e)}")
         return None
-
+ 
 # Speech SDK Callbacks
 def conversation_transcriber_recognition_canceled_cb(evt: speechsdk.SessionEventArgs):
     print('Canceled event')
-
+ 
 def conversation_transcriber_session_stopped_cb(evt: speechsdk.SessionEventArgs):
     print('SessionStopped event')
-
+ 
 def conversation_transcriber_transcribed_cb(evt: speechsdk.SpeechRecognitionEventArgs, transcribed_text):
     try:
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
@@ -61,83 +61,96 @@ def conversation_transcriber_transcribed_cb(evt: speechsdk.SpeechRecognitionEven
     except Exception as e:
         traceback.print_exc()
         print("Error in transcription callback:", e)
-
+ 
 def conversation_transcriber_session_started_cb(evt: speechsdk.SessionEventArgs):
     print('SessionStarted event')
-
+ 
 # Function to perform speech recognition
 def recognize_from_file(audio_file):
     speech_config = speechsdk.SpeechConfig(subscription=os.environ.get('SPEECH_KEY'), region=os.environ.get('SPEECH_REGION'))
     audio_config = speechsdk.audio.AudioConfig(filename=audio_file)
     auto_detect_source_language_config = speechsdk.languageconfig.AutoDetectSourceLanguageConfig(languages=["hi-IN", "mr-IN", "te-IN", "gu-IN"])
     speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, auto_detect_source_language_config=auto_detect_source_language_config, audio_config=audio_config)
-
+ 
     result = speech_recognizer.recognize_once()
     auto_detect_source_language_result = speechsdk.AutoDetectSourceLanguageResult(result)
     detected_language = auto_detect_source_language_result.language
     print("Detected language:", detected_language)
-
+ 
     # Check if the language was detected successfully
     if not detected_language:
         print("Language detection failed. Using default language: en-US")
         detected_language = "en-US"  # Fallback to English
-
+ 
     speech_config.speech_recognition_language = detected_language
     conversation_transcriber = speechsdk.transcription.ConversationTranscriber(speech_config=speech_config, audio_config=audio_config)
     transcribed_text = []
-
+ 
     transcribing_stop = False
-
+ 
     def stop_cb(evt: speechsdk.SessionEventArgs):
         print('CLOSING on {}'.format(evt))
         nonlocal transcribing_stop
         transcribing_stop = True
-
+ 
     conversation_transcriber.transcribed.connect(lambda evt: conversation_transcriber_transcribed_cb(evt, transcribed_text))
     conversation_transcriber.session_started.connect(conversation_transcriber_session_started_cb)
     conversation_transcriber.session_stopped.connect(conversation_transcriber_session_stopped_cb)
     conversation_transcriber.canceled.connect(conversation_transcriber_recognition_canceled_cb)
     conversation_transcriber.session_stopped.connect(stop_cb)
     conversation_transcriber.canceled.connect(stop_cb)
-
+ 
     conversation_transcriber.start_transcribing_async()
-
+ 
     while not transcribing_stop:
         time.sleep(.5)
-
+ 
     conversation_transcriber.stop_transcribing_async()
     print("Transcription completed successfully.")
-
+ 
     return ''.join(transcribed_text)
-
+ 
 # Function to perform translation using OpenAI
-def translate_text(text, chunk_size=100):
-    words = text.split()
+def translate_text(text, max_chunk_size=500, overlap_size=0):
+    sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', text)
     translated_chunks = []
-    
-    # Break the text into chunks of the specified size
-    for i in range(0, len(words), chunk_size):
-        chunk = ' '.join(words[i:i + chunk_size])
-        print(f"Translating chunk {i // chunk_size + 1}/{len(words) // chunk_size + 1}: {chunk[:50]}...")
+   
+    i = 0
+    while i < len(sentences):
+        start = max(i - overlap_size, 0)
+        end = min(i + max_chunk_size, len(sentences))
+       
+        chunk_sentences = sentences[start:end]
+        if i > 0:
+            # Append the last sentence of the previous chunk to the beginning of the current chunk
+            chunk_sentences = [sentences[start - 1]] + chunk_sentences
+       
+        chunk = ' '.join(chunk_sentences)
+       
+        print(f"Translating chunk {i + 1}/{len(sentences)}: {chunk[:50]}...")
+       
         prompt = "Translate the following text to English:"
         output = get_openai_response(prompt, chunk)
+       
         if output:
-            print(f"Translation for chunk {i // chunk_size + 1}/{len(words) // chunk_size + 1} completed: {output[:50]}...")
+            print(f"Translation for chunk {i + 1}/{len(sentences)} completed: {output[:50]}...")
             translated_chunks.append(output)
         else:
-            print(f"Failed to get translation for chunk {i // chunk_size + 1}/{len(words) // chunk_size + 1}.")
-    
+            print(f"Failed to get translation for chunk {i + 1}/{len(sentences)}.")
+       
+        i += max_chunk_size - overlap_size
+   
     return ' '.join(translated_chunks)
-
+ 
 # Function to request completion from OpenAI API
 def get_openai_response(prompt, input_text):
     api_key = os.getenv('AZURE_OPENAI_API_KEY')
     api_base_url = os.getenv('AZURE_OPENAI_ENDPOINT')
-    
+   
     api_version = '2022-12-01'
     deployment_id = 'ver01'
     api_url = f"{api_base_url}/openai/deployments/{deployment_id}/completions?api-version={api_version}"
-    
+   
     payload = {
         "prompt": f"{prompt}\n\nInput: {input_text}\n\nOutput:",
         "max_tokens": 2000,
@@ -150,7 +163,7 @@ def get_openai_response(prompt, input_text):
         "Content-Type": "application/json",
         "api-key": api_key
     }
-
+ 
     try:
         print(f"Request Payload: {payload}")
         response = requests.post(api_url, json=payload, headers=headers)
@@ -167,11 +180,11 @@ def get_openai_response(prompt, input_text):
             print("Response status code:", e.response.status_code)
             print("Response content:", e.response.text)
         return None
-
+ 
 @routes.route('/process_audio', methods=['POST'])
 def process_audio():
     choice = request.form['choice']
-    
+   
     if choice == '1':
         if 'url' in request.form:
             url = request.form['url']
@@ -195,12 +208,12 @@ def process_audio():
             return jsonify({'error': 'Video file is missing.'}), 400
     else:
         return jsonify({'error': 'Invalid choice.'}), 400
-
+ 
     transcribed_text = recognize_from_file(audio_file)
-    
+   
     if transcribed_text:
         translated_text = translate_text(transcribed_text)
-        
+       
         if translated_text:
             # Save output to text files with specific names
             transcribed_file = os.path.join(UPLOAD_FOLDER, 'transcribed.txt')
@@ -209,7 +222,7 @@ def process_audio():
                 f.write(transcribed_text)
             with open(translated_file, 'w', encoding='utf-8') as f:
                 f.write(translated_text)
-            
+           
             # Return JSON response with transcribed and translated texts
             return jsonify({
                 'transcribed_text': transcribed_text,
@@ -221,34 +234,34 @@ def process_audio():
             return jsonify({'error': 'Translation failed.'}), 500
     else:
         return jsonify({'error': 'Transcription failed.'}), 500
-
-@routes.route('/download/<filename>')
+ 
+@routes.route('/download/<filename>', methods=['GET'])
 def download_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
-
+ 
 @routes.route('/ask', methods=['POST'])
 def ask():
     try:
         # Get the question from the form data
         data = request.get_json()
         question = data.get('question')
-        
+       
         if not question:
             return jsonify({'error': 'Question is missing.'}), 400
-
+ 
         # Define the path to the translated.txt file
         file_path = os.path.join(UPLOAD_FOLDER, 'translated.txt')
-
+ 
         # Read the document text from the translated.txt file
         document_text = read_document(file_path)
         if not document_text:
             return jsonify({'error': 'Failed to read document text.'}), 500
-
+ 
         # Create the prompt with the question and document text
         prompt = "Just answer the following question very accurately:"
         input_text = f"{question}\n\n{document_text}"
         answer = get_openai_response(prompt, input_text)
-
+ 
         if answer:
             return jsonify({'answer': answer})
         else:
@@ -256,25 +269,25 @@ def ask():
     except Exception as e:
         print(f"Error in /ask route: {str(e)}")
         return jsonify({'error': 'Internal server error.'}), 500
-
+ 
 # Helper function to read document text (if needed)
 def read_document(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
-
+ 
 @app.route('/read_texts', methods=['GET'])
 def read_texts():
     try:
         transcribed_file_path = os.path.join(UPLOAD_FOLDER, 'transcribed.txt')
         translated_file_path = os.path.join(UPLOAD_FOLDER, 'translated.txt')
-
+ 
         transcribed_text = read_document(transcribed_file_path)
         translated_text = read_document(translated_file_path)
-
+ 
         # Print transcribed_text to terminal
         print("Transcribed Text:")
         print(transcribed_text)
-
+ 
         return jsonify({
             'transcribed_text': transcribed_text,
             'translated_text': translated_text
@@ -282,3 +295,6 @@ def read_texts():
     except Exception as e:
         print(f"Error in /read_texts route: {str(e)}")
         return jsonify({'error': 'Failed to read texts.'}), 500
+ 
+ 
+ 
