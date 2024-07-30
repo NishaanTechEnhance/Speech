@@ -112,7 +112,7 @@ def recognize_from_file(audio_file):
  
 # Function to perform translation using OpenAI
 def translate_text(text):
-    chunk_size = 4000
+    chunk_size = 3000
     words = text.split()
     translated_chunks = []
    
