@@ -2,7 +2,7 @@ from flask import Flask
 from flask_cors import CORS
 
 app = Flask(__name__)  # Creating a Flask application instance
-CORS(app)  # Enable CORS for all routes
+CORS(app, resources={r"/*": {"origins": "https://gentle-cliff-023d4d00f.5.azurestaticapps.net"}})  # Enable CORS for your specific frontend origin
 
 # Register blueprints here
 from routes import routes  # Importing the 'routes' blueprint from routes.py
